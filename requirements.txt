@@ -1,7 +1,8 @@
+-f https://download.pytorch.org/whl/torch_stable.html
+torch==2.5.1+cu121
+torchvision==0.20.1+cu121
+torchaudio===2.5.1+cu121
 diffusers==0.29.0
-torch==2.2.1
-torchaudio==2.2.1
-torchvision==0.17.1
 transformers==4.43.2
 imageio==2.31.1
 imageio-ffmpeg==0.5.1
@@ -10,3 +11,4 @@ omegaconf==2.3.0
 tqdm==4.65.2
 librosa==0.10.2.post1
 einops==0.7.0
+typing_extensions==4.11.0
