@@ -6,6 +6,8 @@ import numpy as np
 from omegaconf import OmegaConf
 from tqdm import tqdm
 import cv2
+import platform
+import subprocess
 
 from diffusers import AutoencoderKLTemporalDecoder
 from diffusers.schedulers import EulerDiscreteScheduler
@@ -19,7 +21,6 @@ from src.models.audio_adapter.audio_proj import AudioProjModel
 from src.models.audio_adapter.audio_to_bucket import Audio2bucketModel
 from src.utils.RIFE.RIFE_HDv3 import RIFEModel
 from src.dataset.face_align.align import AlignImage
-
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -42,7 +43,7 @@ def test(
     face_mask = batch['face_mask']
     image_embeds = image_encoder(
         clip_img
-            ).image_embeds
+    ).image_embeds
 
     audio_feature = batch['audio_feature']
     audio_len = batch['audio_len']
@@ -67,14 +68,11 @@ def test(
     last_audio_prompts = last_audio_prompts[:,:audio_len*2]
     last_audio_prompts = torch.cat([torch.zeros_like(last_audio_prompts[:,:24]), last_audio_prompts, torch.zeros_like(last_audio_prompts[:,:26])], 1)
 
-
     ref_tensor_list = []
     audio_tensor_list = []
     uncond_audio_tensor_list = []
     motion_buckets = []
     for i in tqdm(range(audio_len//step)):
-
-
         audio_clip = audio_prompts[:,i*2*step:i*2*step+10].unsqueeze(0)
         audio_clip_for_bucket = last_audio_prompts[:,i*2*step:i*2*step+50].unsqueeze(0)
         motion_bucket = audio2bucket(audio_clip_for_bucket, image_embeds)
@@ -102,9 +100,9 @@ def test(
         motion_bucket_scale=config.motion_bucket_scale,
         fps=config.fps,
         noise_aug_strength=config.noise_aug_strength,
-        min_guidance_scale1=config.min_appearance_guidance_scale, # 1.0,
+        min_guidance_scale1=config.min_appearance_guidance_scale,  # 1.0,
         max_guidance_scale1=config.max_appearance_guidance_scale,
-        min_guidance_scale2=config.audio_guidance_scale, # 1.0,
+        min_guidance_scale2=config.audio_guidance_scale,  # 1.0,
         max_guidance_scale2=config.audio_guidance_scale,
         overlap=config.overlap,
         shift_offset=config.shift_offset,
@@ -113,14 +111,10 @@ def test(
         i2i_noise_strength=config.i2i_noise_strength
     ).frames
 
-
-    # Concat it with pose tensor
-    # pose_tensor = torch.stack(pose_tensor_list,1).unsqueeze(0)
     video = (video*0.5 + 0.5).clamp(0, 1)
     video = torch.cat([video.to(pipe.device)], dim=0).cpu()
 
     return video
-
 
 class Sonic():
     config_file = os.path.join(BASE_DIR, 'config/inference/sonic.yaml')
@@ -128,9 +122,7 @@ class Sonic():
 
     def __init__(self, 
                  device_id=0,
-                 enable_interpolate_frame=True,
-                 ):
-        
+                 enable_interpolate_frame=True):
         config = self.config
         config.use_interframe = enable_interpolate_frame
 
@@ -179,7 +171,6 @@ class Sonic():
             strict=True,
         )
         
-
         if config.weight_dtype == "fp16":
             weight_dtype = torch.float16
         elif config.weight_dtype == "fp32":
@@ -197,13 +188,12 @@ class Sonic():
 
         self.feature_extractor = AutoFeatureExtractor.from_pretrained(os.path.join(BASE_DIR, 'checkpoints/whisper-tiny/'))
 
-        det_path = os.path.join(BASE_DIR, os.path.join(BASE_DIR, 'checkpoints/yoloface_v5m.pt'))
+        det_path = os.path.join(BASE_DIR, 'checkpoints/yoloface_v5m.pt')
         self.face_det = AlignImage(device, det_path=det_path)
         if config.use_interframe:
             rife = RIFEModel(device=device)
             rife.load_model(os.path.join(BASE_DIR, 'checkpoints', 'RIFE/'))
             self.rife = rife
-
 
         image_encoder.to(weight_dtype)
         vae.to(weight_dtype)
@@ -217,7 +207,6 @@ class Sonic():
         )
         pipe = pipe.to(device=device, dtype=weight_dtype)
 
-
         self.pipe = pipe
         self.whisper = whisper
         self.audio2token = audio2token
@@ -226,7 +215,6 @@ class Sonic():
         self.device = device
 
         print('init done')
-
 
     def preprocess(self,
               image_path, expand_ratio=1.0):
@@ -264,7 +252,6 @@ class Sonic():
                 dynamic_scale=1.0,
                 keep_resolution=False,
                 seed=None):
-        
         config = self.config
         device = self.device
         pipe = self.pipe
@@ -308,7 +295,7 @@ class Sonic():
             width=width,
             height=height,
             batch=test_data,
-            )
+        )
 
         if config.use_interframe:
             rife = self.rife
@@ -325,6 +312,31 @@ class Sonic():
             video = torch.stack(results, 2).cpu()
         
         save_videos_grid(video, video_path, n_rows=video.shape[0], fps=config.fps * 2 if config.use_interframe else config.fps)
-        os.system(f"ffmpeg -i '{video_path}'  -i '{audio_path}' -s {resolution} -vcodec libx264 -acodec aac -crf 18 -shortest '{audio_video_path}' -y; rm '{video_path}'")
+
+        # Cross-platform FFmpeg execution and cleanup
+        ffmpeg_command = [
+            "ffmpeg",
+            "-i", video_path,
+            "-i", audio_path,
+            "-s", resolution,
+            "-vcodec", "libx264",
+            "-acodec", "aac",
+            "-crf", "18",
+            "-shortest",
+            audio_video_path,
+            "-y"
+        ]
+
+        try:
+            subprocess.run(ffmpeg_command, check=True)
+        except subprocess.CalledProcessError as e:
+            print(f"FFmpeg failed: {e}")
+            return -1
+
+        if os.path.exists(video_path):
+            try:
+                os.remove(video_path)
+            except OSError as e:
+                print(f"Failed to delete intermediate file: {e}")
+
         return 0
-        
